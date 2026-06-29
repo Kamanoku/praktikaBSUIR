@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Определение пола по ФИО</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: #f0f4f8;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .card {
+      background: #fff;
+      border-radius: 16px;
+      box-shadow: 0 4px 24px rgba(0,0,0,.1);
+      padding: 40px 48px;
+      width: 100%;
+      max-width: 520px;
+    }
+
+    h1 { font-size: 1.5rem; color: #1a202c; margin-bottom: 8px; }
+
+    .subtitle { color: #718096; font-size: .9rem; margin-bottom: 28px; }
+
+    label { display: block; font-weight: 600; color: #2d3748; margin-bottom: 8px; }
+
+    input[type="text"] {
+      width: 100%;
+      padding: 12px 16px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-size: 1rem;
+      transition: border-color .2s;
+      outline: none;
+    }
+    input[type="text"]:focus  { border-color: #667eea; }
+    input[type="text"].invalid { border-color: #fc8181; background: #fff5f5; }
+
+    button {
+      margin-top: 18px;
+      width: 100%;
+      padding: 13px;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity .2s, transform .1s;
+    }
+    button:hover    { opacity: .9; }
+    button:active   { transform: scale(.98); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* Кнопка в режиме «принудительно» — оранжевая */
+    button.force-mode {
+      background: linear-gradient(135deg, #ed8936, #dd6b20);
+    }
+
+    #result-box {
+      margin-top: 24px;
+      padding: 16px 20px;
+      border-radius: 10px;
+      font-size: .95rem;
+      display: none;
+      line-height: 1.6;
+    }
+
+    #result-box.info    { background: #ebf8ff; border: 1px solid #90cdf4; color: #2b6cb0; }
+    #result-box.warning { background: #fffbeb; border: 1px solid #f6e05e; color: #744210; }
+    #result-box.success { background: #f0fff4; border: 1px solid #9ae6b4; color: #276749; }
+    #result-box.error   { background: #fff5f5; border: 1px solid #feb2b2; color: #c53030; }
+
+    /* Блок объяснения ошибки валидации */
+    .validation-detail {
+      margin-top: 10px;
+      padding: 10px 14px;
+      background: rgba(0,0,0,.04);
+      border-radius: 8px;
+      font-size: .85rem;
+      line-height: 1.5;
+    }
+    .validation-detail .reason { font-weight: 600; }
+    .validation-detail .hint   { color: inherit; opacity: .8; margin-top: 3px; }
+
+    #attempt-counter {
+      margin-top: 12px;
+      font-size: .8rem;
+      color: #a0aec0;
+      text-align: right;
+    }
+
+    .gender-badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 20px;
+      font-weight: 700;
+      font-size: 1.05em;
+    }
+    .badge-m { background: #bee3f8; color: #2a69ac; }
+    .badge-f { background: #fed7e2; color: #97266d; }
+    .badge-u { background: #e2e8f0; color: #718096; }
+
+    .conf-bar-wrap { margin-top: 10px; }
+    .conf-bar-bg {
+      background: #e2e8f0;
+      border-radius: 99px;
+      height: 8px;
+      overflow: hidden;
+    }
+    .conf-bar-fill {
+      height: 100%;
+      border-radius: 99px;
+      background: linear-gradient(90deg, #f6ad55, #48bb78);
+      transition: width .4s ease;
+    }
+    .conf-label { font-size: .78rem; color: #718096; margin-top: 4px; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>🔍 Определение пола по ФИО</h1>
+  <p class="subtitle">Введите полное ФИО на русском языке</p>
+
+  <label for="fio-input">Фамилия Имя Отчество</label>
+  <input
+    id="fio-input"
+    type="text"
+    placeholder="Иванов Иван Иванович"
+    autocomplete="off"
+  />
+
+  <button id="check-btn" onclick="handleSubmit()">Проверить</button>
+
+  <div id="result-box" role="alert"></div>
+  <div id="attempt-counter"></div>
+</div>
+
+<script>
+  const API_URL              = "http://127.0.0.1:5000/predict";
+  const CONFIDENCE_THRESHOLD = 0.75;
+
+  let attemptCount = 0;
+  let lastFIO      = "";
+  let lastResult   = null;
+
+  // ── UI-хелперы ────────────────────────────────────────────
+
+  function showResult(html, cssClass) {
+    const box = document.getElementById("result-box");
+    box.className     = cssClass;
+    box.innerHTML     = html;
+    box.style.display = "block";
+  }
+
+  function updateCounter(n, max) {
+    document.getElementById("attempt-counter").textContent =
+      n > 0 ? `Попытка ${n} из ${max}` : "";
+  }
+
+  function setInputInvalid(invalid) {
+    const inp = document.getElementById("fio-input");
+    if (invalid) inp.classList.add("invalid");
+    else         inp.classList.remove("invalid");
+  }
+
+  function setForceMode(on) {
+    const btn = document.getElementById("check-btn");
+    if (on) {
+      btn.textContent = "Принять принудительно";
+      btn.classList.add("force-mode");
+    } else {
+      btn.textContent = "Проверить";
+      btn.classList.remove("force-mode");
+    }
+  }
+
+  /** Карточка результата с полом и шкалой уверенности */
+  function buildResultHTML(data) {
+    const isUnknown = data.gender === "Неизвестно";
+    const badgeCls  = isUnknown ? "badge-u"
+                    : data.gender === "Женский" ? "badge-f" : "badge-m";
+    const pct       = Math.round(data.confidence * 100);
+
+    return `
+      <strong>Пол:</strong>
+      <span class="gender-badge ${badgeCls}">${data.gender}</span>
+      <div class="conf-bar-wrap">
+        <div class="conf-bar-bg">
+          <div class="conf-bar-fill" style="width:${pct}%"></div>
+        </div>
+        <div class="conf-label">Уверенность модели: ${pct}%</div>
+      </div>`;
+  }
+
+  /** Блок с объяснением ошибки валидации */
+  function buildValidationHTML(warning) {
+    return `
+      <div class="validation-detail">
+        <div class="reason">🔎 ${warning.reason}</div>
+        <div class="hint">💡 ${warning.hint}</div>
+      </div>`;
+  }
+
+  // ── Основная логика ───────────────────────────────────────
+
+  async function handleSubmit() {
+    const fio = document.getElementById("fio-input").value.trim();
+
+    if (!fio) {
+      setInputInvalid(true);
+      showResult("⚠️ Пожалуйста, введите ФИО.", "error");
+      return;
+    }
+
+    // Сброс состояния при изменении ФИО
+    if (fio !== lastFIO) {
+      attemptCount = 0;
+      lastResult   = null;
+      lastFIO      = fio;
+      setInputInvalid(false);
+    }
+
+    // ── ПОПЫТКА 2: принудительный приём ──────────────────────
+    if (attemptCount >= 1 && lastResult) {
+      attemptCount++;
+      updateCounter(attemptCount, 2);
+      setInputInvalid(false);
+
+      const isValidationWarn = !!lastResult.warning;
+
+      showResult(
+        `✅ <strong>Данные успешно приняты.</strong>` +
+        (isValidationWarn
+          ? `<br><em style="font-size:.85rem;opacity:.7">
+               Принято несмотря на предупреждение валидации.
+             </em>`
+          : "") +
+        `<br>${buildResultHTML(lastResult)}`,
+        "success"
+      );
+      setForceMode(false);
+      return;
+    }
+
+    // ── ПЕРВАЯ ОТПРАВКА ───────────────────────────────────────
+    const btn = document.getElementById("check-btn");
+    btn.disabled = true;
+    btn.textContent = "Анализирую…";
+    showResult("⏳ Отправляю запрос к модели…", "info");
+
+    let data;
+    try {
+      const resp = await fetch(API_URL, {
+        method : "POST",
+        headers: { "Content-Type": "application/json" },
+        body   : JSON.stringify({ fio })
+      });
+
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${resp.status}`);
+      }
+
+      data = await resp.json();
+    } catch (err) {
+      showResult(`❌ Ошибка соединения с сервером: ${err.message}`, "error");
+      btn.disabled = false;
+      btn.textContent = "Проверить";
+      return;
+    } finally {
+      btn.disabled = false;
+      if (btn.textContent === "Анализирую…") btn.textContent = "Проверить";
+    }
+
+    lastResult = data;
+    attemptCount++;
+    updateCounter(attemptCount, 2);
+
+    // ── ВЕТКА А: сервер вернул предупреждение валидации ──────
+    if (data.warning) {
+      setInputInvalid(true);
+
+      // alert с конкретной причиной и подсказкой
+      alert(
+        `⚠️ Проверьте данные!\n\n` +
+        `Причина: ${data.warning.reason}\n\n` +
+        `Подсказка: ${data.warning.hint}`
+      );
+
+      showResult(
+        `⚠️ <strong>Модель сомневается в корректности ввода.</strong>` +
+        buildValidationHTML(data.warning) +
+        `<br>${buildResultHTML(data)}<br>` +
+        `<em>Нажмите «Принять принудительно», если хотите принять данные как есть.</em>`,
+        "warning"
+      );
+
+      setForceMode(true);
+      return;
+    }
+
+    setInputInvalid(false);
+
+    // ── ВЕТКА Б: валидация прошла, но модель не уверена ──────
+    if (data.confidence < CONFIDENCE_THRESHOLD) {
+      alert("⚠️ Проверьте данные!\nМодель сомневается в результате.");
+
+      showResult(
+        `⚠️ <strong>Модель сомневается.</strong>
+         Уверенность: <strong>${Math.round(data.confidence * 100)}%</strong>
+         (порог: ${Math.round(CONFIDENCE_THRESHOLD * 100)}%).<br>
+         ${buildResultHTML(data)}<br>
+         <em>Нажмите «Принять принудительно», чтобы принять данные.</em>`,
+        "warning"
+      );
+
+      setForceMode(true);
+      return;
+    }
+
+    // ── ВЕТКА В: всё хорошо, уверенность высокая ─────────────
+    updateCounter(0, 2);
+    showResult(
+      `✅ <strong>Данные приняты.</strong><br>${buildResultHTML(data)}`,
+      "success"
+    );
+    setForceMode(false);
+  }
+
+  // ── Сброс при изменении поля ──────────────────────────────
+  document.getElementById("fio-input").addEventListener("input", () => {
+    const val = document.getElementById("fio-input").value.trim();
+    if (val !== lastFIO) {
+      attemptCount = 0;
+      lastResult   = null;
+      setForceMode(false);
+      setInputInvalid(false);
+      document.getElementById("result-box").style.display = "none";
+      updateCounter(0, 2);
+    }
+  });
+
+  document.getElementById("fio-input").addEventListener("keydown", e => {
+    if (e.key === "Enter") handleSubmit();
+  });
+</script>
+</body>
+</html>
