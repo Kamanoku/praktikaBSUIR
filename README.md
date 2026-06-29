@@ -16,29 +16,30 @@ source .venv/bin/activate  # для Linux/macOS
 # или .venv\Scripts\activate  # для Windows
 
 pip install flask flask-cors tensorflow numpy kaggle
+```
 
 # Скачивание датасета
+```bash
 kaggle datasets download -d rai220/russian-cyrillic-names-and-sex
+```
 
 # Распаковка архива (для Linux/macOS)
+```bash
 unzip russian-cyrillic-names-and-sex.zip
+```
 # или распакуйте архив russian-cyrillic-names-and-sex.zip вручную в корень проекта
 
 # Обучение модели
 - **Если вы хотите сгенерировать файлы весов и словарь символов заново, запустите скрипт обучения:**
 ```bash
 python train.py
+```
 
 # Запуск сервера
 - **Запустите Flask бэкенд:**
 ```bash
 python app.py
+```
 
 # Обучение модели
 - **Просто откройте файл index.html в любом современном браузере. Компиляция или сборка фронтенда не требуется.**
-## Шаг 4. Публикация в удаленный репозиторий (Git Bash / Терминал)
-Откройте терминал или командную строку внутри вашей рабочей директории (`praktik`) и последовательно выполните следующие команды:
-
-1. **Инициализируйте локальный репозиторий:**
-   ```bash
-   git init
