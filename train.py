@@ -217,7 +217,7 @@ def main():
 
     MAX_LEN = 70     # максимальная длина строки ФИО
     EPOCHS  = 20     # EarlyStopping остановит раньше при отсутствии прогресса
-    BATCH   = 64
+    BATCH   = 256
 
     # ── Шаг 1: загрузка данных ──────────────────────────────────
     dataset = load_dataset_auto(kaggle_csv="data.csv")
@@ -260,7 +260,8 @@ def main():
             monitor="val_loss", factor=0.5, patience=2, min_lr=1e-5
         )
     ]
-
+    print(f"📊 РЕАЛЬНЫЙ РАЗМЕР ВЫБОРКИ ДЛЯ ОБУЧЕНИЯ: {len(X_train)} строк")
+    print(f"📊 РЕАЛЬНЫЙ РАЗМЕР ВЫБОРКИ ДЛЯ ВАЛИДАЦИИ: {len(X_val)} строк")
     # ── Шаг 5: обучение ─────────────────────────────────────────
     model.fit(
         X_train, y_train,
