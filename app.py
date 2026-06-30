@@ -1,5 +1,5 @@
 """
-app.py — Flask-сервер для предсказания пола по ФИО.
+app.py — Flask-сервер для проверки соответствия ФИО выбранному полу.
 Запуск: python app.py
 Требует файлы gender_model.keras и char_vocab.json (создаёт train.py).
 """
@@ -29,47 +29,79 @@ CHAR2IDX = vocab_data["char2idx"]
 MAX_LEN  = vocab_data["max_len"]
 
 # ─────────────────────────────────────────────
-# Константы для валидации
+# Константы валидации
 # ─────────────────────────────────────────────
 
-# Минимальная доля кириллических букв в строке
 MIN_CYRILLIC_RATIO = 0.6
-
-# Минимальное количество кириллических букв в строке
-MIN_CYRILLIC_CHARS = 4
-
-# Минимальное количество слов
+MIN_CYRILLIC_CHARS = 2
 MIN_WORDS = 2
+MAX_WORDS = 3
 
-# Паттерн кириллицы
 CYRILLIC_RE = re.compile(r'[а-яёА-ЯЁ]')
-
-# Допустимые символы в ФИО: кириллица, пробел, дефис и два вида апострофов
 VALID_FIO_RE = re.compile(r"^[а-яёА-ЯЁ\s\-\'’]+$")
 
+EASTERN_PARTICLES = {"оглы", "кызы", "ибн", "аль", "ад", "ас", "аш"}
 
 # ─────────────────────────────────────────────
-# Валидация ввода
+# TEMPERATURE SCALING — калибровка уверенности модели
+# ─────────────────────────────────────────────
+# Проблема: sigmoid на необученных краевых случаях часто выдаёт
+# вероятности, близкие к 0.5 (полная неопределённость) или почти
+# 0.99+ (сверхуверенность), и почти никогда — что-то среднее.
+# Это типичный эффект "overconfidence" у LSTM/Dense сетей,
+# обученных через binary_crossentropy без регуляризации вероятностей.
+#
+# Temperature scaling — стандартный метод калибровки (Guo et al., 2017):
+# вместо sigmoid(logit) считаем sigmoid(logit / T), где T > 1 "сглаживает"
+# распределение вероятностей, делая модель менее самоуверенной.
+#
+# T подбирается эмпирически. T=2.5–3.5 обычно даёт более плавный
+# и реалистичный разброс уверенности (60-90% вместо 50%/100%).
+
+TEMPERATURE = 3.0
+
+def calibrate_probability(raw_prob: float, temperature: float = TEMPERATURE) -> float:
+    """
+    Пересчитывает вероятность модели через temperature scaling.
+    raw_prob — исходная вероятность модели (0..1) класса "женщина".
+    Возвращает сглаженную вероятность того же класса.
+    """
+    # Защита от log(0) / log(1)
+    eps = 1e-7
+    p = np.clip(raw_prob, eps, 1 - eps)
+
+    # Переводим вероятность обратно в логит: logit = ln(p / (1-p))
+    logit = np.log(p / (1 - p))
+
+    # Делим логит на температуру — "сжимаем" уверенность к центру
+    scaled_logit = logit / temperature
+
+    # Возвращаем обратно в вероятность через sigmoid
+    calibrated = 1 / (1 + np.exp(-scaled_logit))
+
+    return float(calibrated)
+
+
+# ─────────────────────────────────────────────
+# Валидация ввода (проверка на "человечность" строки)
 # ─────────────────────────────────────────────
 
 def validate_fio(fio: str) -> dict | None:
     """
-    Проверяет строку ФИО на «человечность».
-    Возвращает None если всё хорошо,
-    или словарь {"reason": ..., "hint": ...} если есть проблема.
+    Проверяет, похожа ли строка на настоящее ФИО.
+    Возвращает None если всё хорошо, иначе {"reason": ..., "hint": ...}.
     """
     cyrillic_chars = CYRILLIC_RE.findall(fio)
-    total_letters  = len(re.findall(r'\S', fio))   # не-пробельных символов
-    words          = fio.split()
+    total_letters  = len(re.findall(r'\S', fio)) # Количество букв без пробелов
+    # Разбиваем на слова и игнорируем служебные восточные частицы при подсчете
+    words = [w for w in fio.split() if w.lower() not in EASTERN_PARTICLES]
 
-    # 1. Нет кириллицы вообще (цифры, латиница и т.д.)
     if len(cyrillic_chars) == 0:
         return {
             "reason": "В строке нет кириллических букв",
             "hint":   "ФИО должно быть написано на русском языке, например: Иванов Иван Иванович"
         }
 
-    # 2. Слишком мало кириллических букв относительно общей длины
     cyrillic_ratio = len(cyrillic_chars) / max(total_letters, 1)
     if cyrillic_ratio < MIN_CYRILLIC_RATIO:
         return {
@@ -77,7 +109,6 @@ def validate_fio(fio: str) -> dict | None:
             "hint":   "Введите ФИО только русскими буквами без латиницы и цифр"
         }
 
-    # 3. Недопустимые символы (латиница, цифры, спецсимволы)
     if not VALID_FIO_RE.match(fio):
         bad = set(re.findall(r"[^а-яёА-ЯЁ\s\-\'’]", fio))
         return {
@@ -85,30 +116,37 @@ def validate_fio(fio: str) -> dict | None:
             "hint":   "ФИО должно содержать только русские буквы, пробелы, дефисы и апострофы"
         }
 
-    # 4. Слишком мало слов
     if len(words) < MIN_WORDS:
         return {
             "reason": "Введено слишком мало слов",
             "hint":   "Укажите хотя бы Фамилию и Имя, например: Иванов Иван"
         }
 
-    # 5. Общая длина кириллических букв слишком маленькая
+    # ─── НОВАЯ ПРОВЕРКА: ограничение на максимальное количество слов ───
+    if len(words) > MAX_WORDS:
+        return {
+            "reason": f"Введено слишком много слов ({len(words)})",
+            "hint": "ФИО должно состоять максимум из 3 слов: Фамилия Имя Отчество"
+        }
+
     if len(cyrillic_chars) < MIN_CYRILLIC_CHARS:
         return {
             "reason": "Строка слишком короткая для ФИО",
             "hint":   "Введите полное ФИО"
         }
 
-    # 6. Слова-заглушки: все буквы одинаковые (аааа, бббб)
-    # Игнорируем легитимные восточные частицы и служебные слова
-    EASTERN_PARTICLES = {"оглы", "кызы", "ибн", "аль", "ад", "ас", "аш", "эр"}
+    # ─── НОВАЯ ПРОВЕРКА: Сверхкороткие ФИО (от 2 до 4 символов включительно) ───
+    if 2 <= total_letters <= 4:
+        return {
+            "reason": f"Введённое ФИО подозрительно короткое ({total_letters} симв.)",
+            "hint": "Убедитесь, что данные введены верно (например: «У И» или «Ли Ан»)"
+        }
 
     suspicious_words = []
     for w in words:
         word_lower = w.lower()
         if word_lower in EASTERN_PARTICLES:
             continue
-
         letters = re.findall(r'[а-яёА-ЯЁ]', w)
         if len(letters) >= 3 and len(set(l.lower() for l in letters)) == 1:
             suspicious_words.append(w)
@@ -120,7 +158,15 @@ def validate_fio(fio: str) -> dict | None:
             "hint":   "Введите настоящее ФИО на русском языке"
         }
 
-    return None  # всё в порядке
+    return None
+
+
+def clean_fio_for_model(fio: str) -> str:
+    """Удаляет служебные восточные частицы перед подачей в модель."""
+    particles = r'\b(оглы|кызы|ибн|аль|ад|ас|аш)\b'
+    cleaned = re.sub(particles, '', fio, flags=re.IGNORECASE)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned
 
 
 def encode(text: str) -> np.ndarray:
@@ -131,31 +177,26 @@ def encode(text: str) -> np.ndarray:
 
 
 # ─────────────────────────────────────────────
-# Вспомогательные функции для модели
-# ─────────────────────────────────────────────
-
-def clean_fio_for_model(fio: str) -> str:
-    """Удаляет служебные восточные частицы, чтобы они не путали нейросеть."""
-    particles = r'\b(оглы|кызы|ибн|аль|ад|ас|аш)\b'
-    cleaned = re.sub(particles, '', fio, flags=re.IGNORECASE)
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    return cleaned
-
-
-# ─────────────────────────────────────────────
 # Эндпоинт /predict
 # ─────────────────────────────────────────────
 
 @app.route("/predict", methods=["POST"])
 def predict():
     """
-    Принимает: { "fio": "Иванов Иван Иванович" }
+    Принимает:
+    {
+        "fio":            "Иванов Иван Иванович",
+        "selected_gender": "male" | "female"   # пол, выбранный пользователем
+    }
+
     Возвращает:
     {
-        "gender":     "Мужской" | "Женский" | "Неизвестно",
-        "confidence": 0.50..1.00,
-        "raw_prob":   0.00..1.00,
-        "warning":    null | { "reason": "...", "hint": "..." }
+        "selected_gender":  "male" | "female",
+        "predicted_gender": "Мужской" | "Женский" | "Неизвестно",
+        "match":            true | false | null,   # null если валидация не пройдена
+        "confidence":       0.50..1.00,             # калиброванная уверенность модели
+        "raw_prob":         0.00..1.00,             # вероятность до калибровки
+        "warning":          null | { "reason": "...", "hint": "..." }
     }
     """
     body = request.get_json(silent=True)
@@ -167,41 +208,51 @@ def predict():
     if not fio:
         return jsonify({"error": "ФИО не может быть пустым"}), 400
 
-    # ── Шаг 1: валидация ─────────────────────────────────────
+    selected_gender = body.get("selected_gender")
+    if selected_gender not in ("male", "female"):
+        return jsonify({"error": "Поле 'selected_gender' должно быть 'male' или 'female'"}), 400
+
+    # ── Шаг 1: валидация строки ──────────────────────────────
     validation_error = validate_fio(fio)
 
     if validation_error:
-        # Возвращаем «технический» ответ с низкой уверенностью
-        # и объяснением проблемы — фронтенд покажет алерт
         return jsonify({
-            "gender":     "Неизвестно",
-            "confidence": 0.50,
-            "raw_prob":   0.50,
-            "warning":    validation_error   # {"reason": ..., "hint": ...}
+            "selected_gender":  selected_gender,
+            "predicted_gender": "Неизвестно",
+            "match":            None,
+            "confidence":       0.50,
+            "raw_prob":         0.50,
+            "warning":          validation_error
         })
 
-    # ── Шаг 2: предсказание модели ───────────────────────────
+    # ── Шаг 2: предсказание модели + калибровка ──────────────
     cleaned_fio = clean_fio_for_model(fio)
     x = encode(cleaned_fio)
-    raw_prob = float(model.predict(x, verbose=0)[0][0])
+    raw_prob = float(model.predict(x, verbose=0)[0][0])    # вероятность класса "женщина"
 
-    if raw_prob > 0.5:
-        gender     = "Женский"
-        confidence = raw_prob
-    elif raw_prob < 0.5:
-        gender     = "Мужской"
-        confidence = 1.0 - raw_prob
+    # Применяем temperature scaling, чтобы избежать 50%/100% перекосов
+    calibrated_prob = calibrate_probability(raw_prob)
+
+    if calibrated_prob >= 0.5:
+        predicted_gender = "Женский"
+        confidence        = calibrated_prob
     else:
-        gender     = "Неизвестно"
-        confidence = 0.50
+        predicted_gender = "Мужской"
+        confidence        = 1.0 - calibrated_prob
 
     confidence = max(0.5, min(1.0, confidence))
 
+    # ── Шаг 3: сравнение с выбором пользователя ──────────────
+    predicted_code = "female" if predicted_gender == "Женский" else "male"
+    match = (predicted_code == selected_gender)
+
     return jsonify({
-        "gender":     gender,
-        "confidence": round(confidence, 4),
-        "raw_prob":   round(raw_prob, 4),
-        "warning":    None    # валидация пройдена
+        "selected_gender":  selected_gender,
+        "predicted_gender": predicted_gender,
+        "match":            match,
+        "confidence":       round(confidence, 4),
+        "raw_prob":         round(raw_prob, 4),
+        "warning":          None
     })
 
 
@@ -211,7 +262,7 @@ def predict():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "model": "gender_model.keras"})
+    return jsonify({"status": "ok", "model": "gender_model.keras", "temperature": TEMPERATURE})
 
 
 if __name__ == "__main__":

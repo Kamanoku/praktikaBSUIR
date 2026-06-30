@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Определение пола по ФИО</title>
+  <title>Проверка соответствия ФИО и пола</title>
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -14,6 +14,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      padding: 20px;
     }
 
     .card {
@@ -40,8 +41,54 @@
       transition: border-color .2s;
       outline: none;
     }
-    input[type="text"]:focus  { border-color: #667eea; }
-    input[type="text"].invalid { border-color: #fc8181; background: #fff5f5; }
+    input[type="text"]:focus    { border-color: #667eea; }
+    input[type="text"].invalid  { border-color: #fc8181; background: #fff5f5; }
+
+    /* ── Выбор пола (radio-кнопки в виде сегментов) ── */
+    .gender-select {
+      margin-top: 20px;
+    }
+    .gender-options {
+      display: flex;
+      gap: 10px;
+      margin-top: 8px;
+    }
+    .gender-option {
+      flex: 1;
+      position: relative;
+    }
+    .gender-option input[type="radio"] {
+      position: absolute;
+      opacity: 0;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      cursor: pointer;
+    }
+    .gender-option .option-label {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 12px;
+      border: 2px solid #e2e8f0;
+      border-radius: 8px;
+      font-weight: 600;
+      color: #718096;
+      transition: all .15s;
+      cursor: pointer;
+      user-select: none;
+    }
+    .gender-option input:checked + .option-label {
+      border-color: #667eea;
+      background: #ebf4ff;
+      color: #4c51bf;
+    }
+    .gender-option:nth-child(2) input:checked + .option-label {
+      border-color: #ed64a6;
+      background: #fff5f9;
+      color: #b83280;
+    }
 
     button {
       margin-top: 18px;
@@ -60,7 +107,6 @@
     button:active   { transform: scale(.98); }
     button:disabled { opacity: .5; cursor: not-allowed; }
 
-    /* Кнопка в режиме «принудительно» — оранжевая */
     button.force-mode {
       background: linear-gradient(135deg, #ed8936, #dd6b20);
     }
@@ -74,12 +120,12 @@
       line-height: 1.6;
     }
 
-    #result-box.info    { background: #ebf8ff; border: 1px solid #90cdf4; color: #2b6cb0; }
-    #result-box.warning { background: #fffbeb; border: 1px solid #f6e05e; color: #744210; }
-    #result-box.success { background: #f0fff4; border: 1px solid #9ae6b4; color: #276749; }
-    #result-box.error   { background: #fff5f5; border: 1px solid #feb2b2; color: #c53030; }
+    #result-box.info     { background: #ebf8ff; border: 1px solid #90cdf4; color: #2b6cb0; }
+    #result-box.warning  { background: #fffbeb; border: 1px solid #f6e05e; color: #744210; }
+    #result-box.success  { background: #f0fff4; border: 1px solid #9ae6b4; color: #276749; }
+    #result-box.error    { background: #fff5f5; border: 1px solid #feb2b2; color: #c53030; }
+    #result-box.mismatch { background: #fff5f5; border: 1px solid #fc8181; color: #9b2c2c; }
 
-    /* Блок объяснения ошибки валидации */
     .validation-detail {
       margin-top: 10px;
       padding: 10px 14px;
@@ -109,6 +155,15 @@
     .badge-f { background: #fed7e2; color: #97266d; }
     .badge-u { background: #e2e8f0; color: #718096; }
 
+    .compare-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+    .compare-arrow { color: #a0aec0; font-size: 1.1em; }
+
     .conf-bar-wrap { margin-top: 10px; }
     .conf-bar-bg {
       background: #e2e8f0;
@@ -127,8 +182,8 @@
 </head>
 <body>
 <div class="card">
-  <h1>🔍 Определение пола по ФИО</h1>
-  <p class="subtitle">Введите полное ФИО на русском языке</p>
+  <h1>🔍 Проверка соответствия ФИО и пола</h1>
+  <p class="subtitle">Введите ФИО и укажите ожидаемый пол — модель проверит совпадение</p>
 
   <label for="fio-input">Фамилия Имя Отчество</label>
   <input
@@ -138,6 +193,20 @@
     autocomplete="off"
   />
 
+  <div class="gender-select">
+    <label>Выберите пол</label>
+    <div class="gender-options">
+      <div class="gender-option">
+        <input type="radio" name="gender" id="gender-male" value="male" checked />
+        <label class="option-label" for="gender-male">👨 Мужской</label>
+      </div>
+      <div class="gender-option">
+        <input type="radio" name="gender" id="gender-female" value="female" />
+        <label class="option-label" for="gender-female">👩 Женский</label>
+      </div>
+    </div>
+  </div>
+
   <button id="check-btn" onclick="handleSubmit()">Проверить</button>
 
   <div id="result-box" role="alert"></div>
@@ -145,12 +214,13 @@
 </div>
 
 <script>
-  const API_URL              = "http://127.0.0.1:5000/predict";
-  const CONFIDENCE_THRESHOLD = 0.75;
+  const API_URL = "http://127.0.0.1:5000/predict";
 
-  let attemptCount = 0;
-  let lastFIO      = "";
-  let lastResult   = null;
+  // Состояние для счётчика попыток / кеша последнего запроса
+  let attemptCount    = 0;
+  let lastFIO         = "";
+  let lastGender       = "";
+  let lastResult       = null;
 
   // ── UI-хелперы ────────────────────────────────────────────
 
@@ -175,7 +245,7 @@
   function setForceMode(on) {
     const btn = document.getElementById("check-btn");
     if (on) {
-      btn.textContent = "Принять принудительно";
+      btn.textContent = "Да, я уверен — принять";
       btn.classList.add("force-mode");
     } else {
       btn.textContent = "Проверить";
@@ -183,16 +253,35 @@
     }
   }
 
-  /** Карточка результата с полом и шкалой уверенности */
-  function buildResultHTML(data) {
-    const isUnknown = data.gender === "Неизвестно";
-    const badgeCls  = isUnknown ? "badge-u"
-                    : data.gender === "Женский" ? "badge-f" : "badge-m";
+  function getSelectedGender() {
+    return document.querySelector('input[name="gender"]:checked').value;
+  }
+
+  function genderLabel(code) {
+    return code === "female" ? "Женский" : "Мужской";
+  }
+
+  function genderBadgeClass(code) {
+    return code === "female" ? "badge-f" : "badge-m";
+  }
+
+  /** Карточка с сопоставлением «выбрано» vs «предсказано» + шкала уверенности */
+  function buildCompareHTML(data) {
+    const selLabel  = genderLabel(data.selected_gender);
+    const selBadge  = genderBadgeClass(data.selected_gender);
+    const predLabel = data.predicted_gender;
+    const predBadge = predLabel === "Женский" ? "badge-f"
+                     : predLabel === "Мужской" ? "badge-m" : "badge-u";
     const pct       = Math.round(data.confidence * 100);
 
     return `
-      <strong>Пол:</strong>
-      <span class="gender-badge ${badgeCls}">${data.gender}</span>
+      <div class="compare-row">
+        <span>Выбрано:</span>
+        <span class="gender-badge ${selBadge}">${selLabel}</span>
+        <span class="compare-arrow">↔</span>
+        <span>Модель предполагает:</span>
+        <span class="gender-badge ${predBadge}">${predLabel}</span>
+      </div>
       <div class="conf-bar-wrap">
         <div class="conf-bar-bg">
           <div class="conf-bar-fill" style="width:${pct}%"></div>
@@ -201,7 +290,6 @@
       </div>`;
   }
 
-  /** Блок с объяснением ошибки валидации */
   function buildValidationHTML(warning) {
     return `
       <div class="validation-detail">
@@ -212,8 +300,9 @@
 
   // ── Основная логика ───────────────────────────────────────
 
-  async function handleSubmit() {
-    const fio = document.getElementById("fio-input").value.trim();
+async function handleSubmit() {
+    const fio    = document.getElementById("fio-input").value.trim();
+    const gender = getSelectedGender();
 
     if (!fio) {
       setInputInvalid(true);
@@ -221,30 +310,38 @@
       return;
     }
 
-    // Сброс состояния при изменении ФИО
-    if (fio !== lastFIO) {
+    // Сброс состояния, если ФИО или выбор пола изменились
+    if (fio !== lastFIO || gender !== lastGender) {
       attemptCount = 0;
       lastResult   = null;
       lastFIO      = fio;
+      lastGender   = gender;
       setInputInvalid(false);
     }
 
-    // ── ПОПЫТКА 2: принудительный приём ──────────────────────
+    // ── ПОВТОРНОЕ НАЖАТИЕ: принудительное подтверждение ──────
     if (attemptCount >= 1 && lastResult) {
       attemptCount++;
       updateCounter(attemptCount, 2);
       setInputInvalid(false);
 
-      const isValidationWarn = !!lastResult.warning;
+      const wasValidationWarn = !!lastResult.warning;
+      const wasMismatch       = lastResult.match === false;
+
+      let extraNote = "";
+      if (wasValidationWarn) {
+        extraNote = `<br><em style="font-size:.85rem;opacity:.7">
+                        Принято несмотря на предупреждение валидации.
+                      </em>`;
+      } else if (wasMismatch) {
+        extraNote = `<br><em style="font-size:.85rem;opacity:.7">
+                        Пользователь подтвердил пол «${genderLabel(lastResult.selected_gender)}»,
+                        несмотря на несовпадение с предсказанием модели.
+                      </em>`;
+      }
 
       showResult(
-        `✅ <strong>Данные успешно приняты.</strong>` +
-        (isValidationWarn
-          ? `<br><em style="font-size:.85rem;opacity:.7">
-               Принято несмотря на предупреждение валидации.
-             </em>`
-          : "") +
-        `<br>${buildResultHTML(lastResult)}`,
+        `✅ <strong>Данные успешно приняты.</strong>${extraNote}<br>${buildCompareHTML(lastResult)}`,
         "success"
       );
       setForceMode(false);
@@ -254,6 +351,7 @@
     // ── ПЕРВАЯ ОТПРАВКА ───────────────────────────────────────
     const btn = document.getElementById("check-btn");
     btn.disabled = true;
+    const originalLabel = btn.textContent;
     btn.textContent = "Анализирую…";
     showResult("⏳ Отправляю запрос к модели…", "info");
 
@@ -262,7 +360,7 @@
       const resp = await fetch(API_URL, {
         method : "POST",
         headers: { "Content-Type": "application/json" },
-        body   : JSON.stringify({ fio })
+        body   : JSON.stringify({ fio, selected_gender: gender })
       });
 
       if (!resp.ok) {
@@ -274,33 +372,27 @@
     } catch (err) {
       showResult(`❌ Ошибка соединения с сервером: ${err.message}`, "error");
       btn.disabled = false;
-      btn.textContent = "Проверить";
+      btn.textContent = originalLabel;
       return;
     } finally {
       btn.disabled = false;
-      if (btn.textContent === "Анализирую…") btn.textContent = "Проверить";
+      if (btn.textContent === "Анализирую…") btn.textContent = originalLabel;
     }
 
     lastResult = data;
     attemptCount++;
     updateCounter(attemptCount, 2);
 
-    // ── ВЕТКА А: сервер вернул предупреждение валидации ──────
+    // ── ВЕТКА А: сервер заблокировал ввод на этапе валидации ──
     if (data.warning) {
       setInputInvalid(true);
 
-      // alert с конкретной причиной и подсказкой
-      alert(
-        `⚠️ Проверьте данные!\n\n` +
-        `Причина: ${data.warning.reason}\n\n` +
-        `Подсказка: ${data.warning.hint}`
-      );
+      // ВСПЛЫВАЮЩЕЕ ОКНО ALERT УБРАНО ОТСЮДА
 
       showResult(
         `⚠️ <strong>Модель сомневается в корректности ввода.</strong>` +
         buildValidationHTML(data.warning) +
-        `<br>${buildResultHTML(data)}<br>` +
-        `<em>Нажмите «Принять принудительно», если хотите принять данные как есть.</em>`,
+        `<br><em>Нажмите «Да, я уверен — принять», если хотите принять данные как есть.</em>`,
         "warning"
       );
 
@@ -310,33 +402,32 @@
 
     setInputInvalid(false);
 
-    // ── ВЕТКА Б: валидация прошла, но модель не уверена ──────
-    if (data.confidence < CONFIDENCE_THRESHOLD) {
-      alert("⚠️ Проверьте данные!\nМодель сомневается в результате.");
+    // ── ВЕТКА Б: пол НЕ совпал с предсказанием модели ─────────
+    if (data.match === false) {
+
+      // ВСПЛЫВАЮЩЕЕ ОКНО ALERT УБРАНО ОТСЮДА
 
       showResult(
-        `⚠️ <strong>Модель сомневается.</strong>
-         Уверенность: <strong>${Math.round(data.confidence * 100)}%</strong>
-         (порог: ${Math.round(CONFIDENCE_THRESHOLD * 100)}%).<br>
-         ${buildResultHTML(data)}<br>
-         <em>Нажмите «Принять принудительно», чтобы принять данные.</em>`,
-        "warning"
+        `⚠️ <strong>Указанный пол не совпадает с предсказанием модели.</strong><br>
+         ${buildCompareHTML(data)}<br>
+         <em>Нажмите «Да, я уверен — принять», чтобы подтвердить ваш выбор.</em>`,
+        "mismatch"
       );
 
       setForceMode(true);
       return;
     }
 
-    // ── ВЕТКА В: всё хорошо, уверенность высокая ─────────────
+    // ── ВЕТКА В: пол совпал с предсказанием ───────────────────
     updateCounter(0, 2);
     showResult(
-      `✅ <strong>Данные приняты.</strong><br>${buildResultHTML(data)}`,
+      `✅ <strong>Данные приняты — пол подтверждён моделью.</strong><br>${buildCompareHTML(data)}`,
       "success"
     );
     setForceMode(false);
   }
 
-  // ── Сброс при изменении поля ──────────────────────────────
+  // ── Сброс при изменении поля или выбора пола ──────────────
   document.getElementById("fio-input").addEventListener("input", () => {
     const val = document.getElementById("fio-input").value.trim();
     if (val !== lastFIO) {
@@ -347,6 +438,20 @@
       document.getElementById("result-box").style.display = "none";
       updateCounter(0, 2);
     }
+  });
+
+  document.querySelectorAll('input[name="gender"]').forEach(radio => {
+    radio.addEventListener("change", () => {
+      const g = getSelectedGender();
+      if (g !== lastGender) {
+        attemptCount = 0;
+        lastResult   = null;
+        setForceMode(false);
+        setInputInvalid(false);
+        document.getElementById("result-box").style.display = "none";
+        updateCounter(0, 2);
+      }
+    });
   });
 
   document.getElementById("fio-input").addEventListener("keydown", e => {
